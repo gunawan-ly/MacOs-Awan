@@ -50,14 +50,13 @@
 // ----------------------------------------------------------------------
 
 static void listDisplays(const char *tag) {
-    const uint32_t max = 16;
-    CGDirectDisplayID ids[max];
+    CGDirectDisplayID ids[16];
     uint32_t online = 0, active = 0;
     memset(ids, 0, sizeof(ids));
-    CGGetOnlineDisplayList(max, ids, &online);
-    CGGetActiveDisplayList(max, ids, &active);
+    CGGetOnlineDisplayList(16, ids, &online);
+    CGGetActiveDisplayList(16, ids, &active);
     printf("[VDISPLAY] %s online=%u active=%u ids:", tag, online, active);
-    for (uint32_t i = 0; i < online && i < max; i++) printf(" %u", ids[i]);
+    for (uint32_t i = 0; i < online && i < 16; i++) printf(" %u", ids[i]);
     printf("\n");
     fflush(stdout);
 }
@@ -148,13 +147,13 @@ int main(int argc, const char *argv[]) {
                    CGDisplayModeGetRefreshRate(cur), (unsigned)CGDisplayModeGetIOFlags(cur));
             CFRelease(cur);
         }
-        CGImageRef shot = CGDisplayCreateImage(did);
-        if (shot) {
-            printf("[VDISPLAY] framebuffer capture OK image=%zux%zu\n",
-                   CGImageGetWidth(shot), CGImageGetHeight(shot));
-            CFRelease(shot);
-        } else {
-            printf("[VDISPLAY] WARN CGDisplayCreateImage returned NULL (no render surface yet)\n");
+        // Framebuffer proof without deprecated capture APIs: a live display
+        // reports nonzero bytes-per-row and bits-per-pixel for its surface.
+        size_t bpr = CGDisplayBytesPerRow(did);
+        size_t bpp = CGDisplayBitsPerPixel(did);
+        printf("[VDISPLAY] framebuffer bytesPerRow=%zu bitsPerPixel=%zu\n", bpr, bpp);
+        if (bpr == 0 || bpp == 0) {
+            printf("[VDISPLAY] WARN zero framebuffer geometry (surface may not be live yet)\n");
         }
         listDisplays("AFTER");
         fflush(stdout);
