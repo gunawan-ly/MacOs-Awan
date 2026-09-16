@@ -101,20 +101,30 @@ jobs:
           export HOMEBREW_NO_AUTO_UPDATE=1
           echo "[INFO] $(date -u '+%H:%M:%S') installing BetterDisplay"
           brew install --cask betterdisplay
-          echo "[INFO] $(date -u '+%H:%M:%S') launching via direct path"
-          open "/Applications/BetterDisplay.app" || true
-          for i in $(seq 1 15); do
-            pgrep -x BetterDisplay >/dev/null && break
-            sleep 2
-          done
-          if ! pgrep -x BetterDisplay >/dev/null; then
-            echo "[WARN] Direct launch not detected, fallback: register with lsregister and retry"
-            /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f "/Applications/BetterDisplay.app" || true
-            open "/Applications/BetterDisplay.app" || true
-            for i in $(seq 1 15); do
+          launch_bd() {
+            open "/Applications/BetterDisplay.app" > /tmp/bd-open.log 2>&1 &
+            OPENPID=$!
+            OELAPSED=0
+            while kill -0 $OPENPID 2>/dev/null; do
               pgrep -x BetterDisplay >/dev/null && break
-              sleep 2
+              if [ "$OELAPSED" -ge 60 ]; then
+                echo "[WARN] open blocked over 60s, detaching (kill open, keep any started app)"
+                kill -KILL $OPENPID 2>/dev/null || true
+                break
+              fi
+              sleep 5
+              OELAPSED=$((OELAPSED + 5))
             done
+            wait $OPENPID 2>/dev/null || true
+            cat /tmp/bd-open.log || true
+          }
+          echo "[INFO] $(date -u '+%H:%M:%S') launching via direct path (attempt 1)"
+          launch_bd
+          if ! pgrep -x BetterDisplay >/dev/null; then
+            echo "[WARN] $(date -u '+%H:%M:%S') direct launch not detected, fallback: register with lsregister and retry"
+            /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f "/Applications/BetterDisplay.app" || true
+            echo "[INFO] $(date -u '+%H:%M:%S') launching via direct path (attempt 2)"
+            launch_bd
           fi
           pgrep -x BetterDisplay >/dev/null && echo "[INFO] BetterDisplay running" || echo "[WARN] BetterDisplay process not detected"
           sleep 5
