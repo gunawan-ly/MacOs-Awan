@@ -115,6 +115,10 @@ jobs:
               sleep 5
               OELAPSED=$((OELAPSED + 5))
             done
+            if kill -0 $OPENPID 2>/dev/null; then
+              echo "[INFO] open helper still alive, detaching (launched app is unaffected)"
+              kill -KILL $OPENPID 2>/dev/null || true
+            fi
             wait $OPENPID 2>/dev/null || true
             cat /tmp/bd-open.log || true
           }
