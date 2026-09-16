@@ -1,4 +1,4 @@
-name: "macOS Runner - Phase 1"
+name: "macOS Runner - Phase 4 AnyDesk"
 
 on:
   workflow_dispatch:
@@ -14,20 +14,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Connect Tailscale
-        uses: tailscale/github-action@v4
-        with:
-          authkey: ${{ secrets.TAILSCALE_AUTHKEY }}
-
-      - name: Phase 2 - verify Tailscale
-        shell: bash
-        run: |
-          echo "[INFO] Tailscale setup started"
-          tailscale ip -4
-          tailscale status --self=true || tailscale status
-          echo "[INFO] Tailscale connected"
-
-      - name: Phase 1 - macOS environment verification
+      - name: Phase 4 - 1. Prepare macOS
         shell: bash
         run: |
           echo "[INFO] macOS setup started"
@@ -75,108 +62,178 @@ jobs:
           bash /tmp/phase1-test.sh
           echo "[INFO] shell script test completed"
 
-      - name: Phase 3 - check GUI session (option B diagnostics)
+      - name: Phase 4 - 2. Install AnyDesk
         shell: bash
         run: |
-          echo "[INFO] GUI session diagnostics started (read-only, no system changes)"
-          echo "--- logged in users ---"
+          echo "[INFO] AnyDesk installation started"
+          echo "[INFO] Architecture detected:"
+          uname -m
+          export HOMEBREW_NO_AUTO_UPDATE=1
+          brew install --cask anydesk
+          echo "[INFO] Verifying installation"
+          ls -la /Applications/AnyDesk.app || { echo "::error::FAIL - /Applications/AnyDesk.app missing after install"; exit 1; }
+          AD_BIN="/Applications/AnyDesk.app/Contents/MacOS/AnyDesk"
+          if [ ! -x "$AD_BIN" ]; then
+            echo "[INFO] Default CLI path missing, searching bundle"
+            AD_BIN=$(find /Applications/AnyDesk.app -name AnyDesk -type f -perm +111 2>/dev/null | head -1)
+          fi
+          if [ -z "$AD_BIN" ] || [ ! -x "$AD_BIN" ]; then
+            echo "::error::FAIL - AnyDesk executable not found in bundle"
+            exit 1
+          fi
+          echo "$AD_BIN" > /tmp/anydesk-bin
+          echo "[INFO] CLI path: $AD_BIN"
+          "$AD_BIN" --version || { echo "::error::FAIL - AnyDesk binary will not run"; exit 1; }
+          echo "[INFO] AnyDesk installation completed"
+
+      - name: Phase 4 - 3. Start AnyDesk
+        shell: bash
+        run: |
+          echo "[INFO] Starting AnyDesk (bounded launch, max 60s)"
+          open -a AnyDesk > /tmp/anydesk-open.log 2>&1 &
+          OPENPID=$!
+          OELAPSED=0
+          while kill -0 $OPENPID 2>/dev/null; do
+            pgrep -x AnyDesk >/dev/null && break
+            if [ "$OELAPSED" -ge 60 ]; then
+              echo "[WARN] open blocked over 60s, detaching (launched app is unaffected)"
+              kill -KILL $OPENPID 2>/dev/null || true
+              break
+            fi
+            sleep 5
+            OELAPSED=$((OELAPSED + 5))
+          done
+          if kill -0 $OPENPID 2>/dev/null; then
+            kill -KILL $OPENPID 2>/dev/null || true
+          fi
+          wait $OPENPID 2>/dev/null || true
+          cat /tmp/anydesk-open.log || true
+          sleep 5
+          ps aux | grep -i "[A]nyDesk" || echo "[WARN] no AnyDesk process detected"
+          echo "[INFO] AnyDesk start phase completed"
+
+      - name: Phase 4 - 4. Configure Unattended Access
+        shell: bash
+        env:
+          ANYDESK_PASSWORD: ${{ secrets.ANYDESK_PASSWORD }}
+        run: |
+          echo "[INFO] Unattended access configuration started"
+          if [ -z "$ANYDESK_PASSWORD" ]; then
+            echo "::error::FAIL - ANYDESK_PASSWORD secret is missing. Create it in repo Settings > Secrets > Actions."
+            exit 1
+          fi
+          PWLEN=${#ANYDESK_PASSWORD}
+          echo "[INFO] Password length check: ${PWLEN} chars (value never printed)"
+          if [ "$PWLEN" -lt 8 ]; then
+            echo "::error::FAIL - ANYDESK_PASSWORD must be at least 8 characters (12+ recommended)."
+            exit 1
+          fi
+          AD_BIN=$(cat /tmp/anydesk-bin)
+          printf '%s' "$ANYDESK_PASSWORD" | sudo "$AD_BIN" --set-password
+          unset ANYDESK_PASSWORD
+          echo "[INFO] Unattended access password configured"
+
+      - name: Phase 4 - 5. Verify AnyDesk ID
+        shell: bash
+        run: |
+          echo "[INFO] Waiting for AnyDesk ID (max 60s)"
+          AD_BIN=$(cat /tmp/anydesk-bin)
+          ANYDESK_ID=""
+          for i in $(seq 1 12); do
+            ANYDESK_ID=$("$AD_BIN" --get-id 2>/dev/null || true)
+            if [ -n "$ANYDESK_ID" ]; then
+              break
+            fi
+            echo "[INFO] Attempt $i: ID empty, retrying..."
+            sleep 5
+          done
+          if [ -z "$ANYDESK_ID" ]; then
+            echo "::error::FAIL - AnyDesk did not obtain an ID"
+            exit 1
+          fi
+          echo "$ANYDESK_ID" > /tmp/anydesk-id
+          echo "[INFO] AnyDesk ID obtained: $ANYDESK_ID"
+
+      - name: Phase 4 - 6. Verify AnyDesk Status
+        shell: bash
+        run: |
+          echo "[INFO] AnyDesk status diagnostics"
+          AD_BIN=$(cat /tmp/anydesk-bin)
+          "$AD_BIN" --version || true
+          echo "--- online status (max 60s) ---"
+          for i in $(seq 1 12); do
+            AD_STATUS=$("$AD_BIN" --get-status 2>/dev/null || true)
+            echo "[INFO] Attempt $i status: ${AD_STATUS:-empty}"
+            echo "$AD_STATUS" | grep -qi "online" && break
+            sleep 5
+          done
+          echo "$AD_STATUS" > /tmp/anydesk-status
+          echo "--- processes ---"
+          ps aux | grep -i "[A]nyDesk" || echo "no AnyDesk process"
+          echo "--- session context ---"
+          stat -f %Su /dev/console || true
+          echo "[INFO] AnyDesk status diagnostics completed"
+
+      - name: Connect Tailscale
+        uses: tailscale/github-action@v4
+        with:
+          authkey: ${{ secrets.TAILSCALE_AUTHKEY }}
+
+      - name: Phase 2 - verify Tailscale
+        shell: bash
+        run: |
+          echo "[INFO] Tailscale setup started"
+          tailscale ip -4
+          tailscale status --self=true || tailscale status
+          echo "[INFO] Tailscale connected"
+
+      - name: Phase 3 - check GUI session (diagnostics context)
+        shell: bash
+        run: |
+          echo "[INFO] GUI session diagnostics (read-only context for permission analysis)"
           who || true
-          w -h || true
           echo "--- console owner ---"
           stat -f %Su /dev/console || true
           echo "--- WindowServer ---"
           ps aux | grep -i "[W]indowServer" || echo "no WindowServer process found"
-          echo "--- loginwindow ---"
-          ps aux | grep -i "[l]oginwindow" || echo "no loginwindow process found"
           echo "--- displays ---"
-          system_profiler SPDisplaysDataType 2>/dev/null | head -40 || true
-          echo "--- Aqua session services ---"
-          launchctl print "gui/$(id -u)" 2>&1 | head -20 || true
+          system_profiler SPDisplaysDataType 2>/dev/null | head -20 || echo "no displays detected"
           echo "[INFO] GUI session diagnostics completed"
 
-      - name: Phase 3B - build virtual display tool
+      - name: Phase 4 - 8. Display connection information
         shell: bash
         run: |
-          echo "[INFO] Building vdisplay (CGVirtualDisplay, single-file ObjC, no Xcode project)"
-          clang --version | head -2
-          clang -O2 -framework Foundation -framework CoreGraphics -o /tmp/vdisplay tools/vdisplay/vdisplay.m
-          ls -l /tmp/vdisplay
-          echo "[INFO] Build completed"
-
-      - name: Phase 3B - create virtual display
-        shell: bash
-        run: |
-          echo "[INFO] Starting vdisplay 1280x720 (owner process stays alive)"
-          nohup /tmp/vdisplay 1280 720 > /tmp/vdisplay.log 2>&1 &
-          echo $! > /tmp/vdisplay.pid
-          for i in $(seq 1 12); do
-            grep -q "READY" /tmp/vdisplay.log 2>/dev/null && break
-            grep -q "FAIL" /tmp/vdisplay.log 2>/dev/null && break
-            sleep 5
-          done
-          cat /tmp/vdisplay.log
-          if grep -q "FAIL" /tmp/vdisplay.log 2>/dev/null; then
-            echo "::error::vdisplay reported FAIL, see log above"
-            exit 1
-          fi
-          if ! grep -q "READY" /tmp/vdisplay.log 2>/dev/null; then
-            echo "::error::vdisplay did not report READY within 60s"
-            kill -KILL $(cat /tmp/vdisplay.pid) 2>/dev/null || true
-            exit 1
-          fi
-          kill -0 $(cat /tmp/vdisplay.pid) 2>/dev/null && echo "[INFO] vdisplay owner alive" || { echo "::error::vdisplay owner died"; exit 1; }
-          echo "--- displays after virtual display ---"
-          system_profiler SPDisplaysDataType 2>/dev/null || echo "no displays detected"
-          echo "[INFO] Virtual display setup completed"
-
-      - name: Phase 3 - enable Screen Sharing (VNC)
-        shell: bash
-        env:
-          VNC_PASSWORD: ${{ secrets.VNC_PASSWORD }}
-        run: |
-          echo "[INFO] Remote GUI setup started"
-          if [ -z "$VNC_PASSWORD" ]; then
-            echo "::error::VNC_PASSWORD secret is not set. Create it in repo Settings > Secrets > Actions."
-            exit 1
-          fi
-          KICKSTART="/System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart"
-          echo "[INFO] Configuring Remote Management for all users"
-          sudo "$KICKSTART" -activate -configure -access -on -privs -all -restart -agent -allowAccessFor -allUsers
-          echo "[INFO] Enabling VNC legacy mode"
-          sudo "$KICKSTART" -configure -clientopts -setvnclegacy -vnclegacy yes
-          echo "[INFO] Setting VNC password from secret"
-          sudo "$KICKSTART" -configure -clientopts -setvncpw -vncpw "$VNC_PASSWORD"
-          unset VNC_PASSWORD
-          echo "[INFO] Restarting ARD agent"
-          sudo "$KICKSTART" -restart -agent -console || sudo "$KICKSTART" -restart -agent
-          echo "[INFO] Waking display (temporary assertion, ends with workflow)"
-          caffeinate -u -t 300 &
-          echo "[INFO] Remote GUI ready"
-
-      - name: Phase 3 - verify Screen Sharing
-        shell: bash
-        run: |
-          echo "[INFO] Verifying Screen Sharing listener on port 5900"
-          sudo lsof -iTCP:5900 -sTCP:LISTEN || sudo lsof -i :5900 || true
-          ps aux | grep -i -E "screensharing|ARDAgent|VNC" | grep -v grep || true
-          echo "--- GUI session after setup ---"
-          stat -f %Su /dev/console || true
-          ps aux | grep -i "[W]indowServer" || echo "no WindowServer process found"
-          echo "--- displays detected ---"
-          system_profiler SPDisplaysDataType 2>/dev/null || echo "no displays detected"
-          echo "--- display resolutions ---"
-          system_profiler SPDisplaysDataType 2>/dev/null | grep -i -E "Resolution|Display Type|Main Display|Mirror|Online" || echo "no resolution info"
-          echo "--- framebuffer check ---"
-          ioreg -l 2>/dev/null | grep -i -m 3 "IODisplayPrefsKey" || echo "no IODisplay framebuffer entries"
-          echo "--- Tailscale IP for VNC ---"
-          tailscale ip -4
+          ANYDESK_ID=$(cat /tmp/anydesk-id)
+          AD_STATUS=$(cat /tmp/anydesk-status 2>/dev/null || echo "unknown")
+          TS_IP=$(tailscale ip -4 2>/dev/null | head -1 || echo "unknown")
+          echo "================================"
+          echo "ANYDESK REMOTE ACCESS"
+          echo "================================"
+          echo ""
+          echo "AnyDesk ID:"
+          echo "$ANYDESK_ID"
+          echo ""
+          echo "Status:"
+          echo "$AD_STATUS"
+          echo ""
+          echo "Runner:"
+          sw_vers | head -2
+          uname -m
+          echo ""
+          echo "Tailscale IP (diagnostic layer):"
+          echo "$TS_IP"
+          echo ""
+          echo "Keep-alive:"
+          echo "ACTIVE"
+          echo ""
+          echo "Connect from Android using AnyDesk + unattended password."
           echo "[INFO] Connection information available"
-          echo "[INFO] Connect VNC client to <TAILSCALE_IP>:5900 via Tailnet using VNC password"
 
-      - name: Phase 1 - keep-alive (manual cancel, max 6h)
+      - name: Phase 4 - 9. Keep Alive
         shell: bash
         run: |
           echo "[INFO] Keep-alive started - cancel workflow manually to stop (max 6h GitHub limit)"
+          echo "[INFO] AnyDesk + Tailscale remain running during keep-alive"
           while true; do
             echo "[INFO] Alive at $(date -u '+%Y-%m-%d %H:%M:%S UTC') - workflow ready"
             sleep 60
