@@ -98,10 +98,12 @@ jobs:
         shell: bash
         run: |
           echo "[INFO] Virtual display setup started (BetterDisplay, ephemeral for this workflow only)"
+          export HOMEBREW_NO_AUTO_UPDATE=1
+          echo "[INFO] $(date -u '+%H:%M:%S') installing BetterDisplay"
           brew install --cask betterdisplay
-          echo "[INFO] Launching BetterDisplay via direct path"
+          echo "[INFO] $(date -u '+%H:%M:%S') launching via direct path"
           open "/Applications/BetterDisplay.app" || true
-          for i in $(seq 1 30); do
+          for i in $(seq 1 15); do
             pgrep -x BetterDisplay >/dev/null && break
             sleep 2
           done
@@ -109,7 +111,7 @@ jobs:
             echo "[WARN] Direct launch not detected, fallback: register with lsregister and retry"
             /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f "/Applications/BetterDisplay.app" || true
             open "/Applications/BetterDisplay.app" || true
-            for i in $(seq 1 30); do
+            for i in $(seq 1 15); do
               pgrep -x BetterDisplay >/dev/null && break
               sleep 2
             done
@@ -123,7 +125,8 @@ jobs:
           ELAPSED=0
           while kill -0 $CLIPID 2>/dev/null; do
             if [ "$ELAPSED" -ge 90 ]; then
-              echo "[WARN] create timed out after 90s, killing"
+              echo "[WARN] create timed out after 90s, app state:"
+              ps aux | grep -i "[B]etterDisplay" || echo "no BetterDisplay process"
               kill -KILL $CLIPID 2>/dev/null || true
               break
             fi
