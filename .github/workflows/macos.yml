@@ -99,12 +99,21 @@ jobs:
         run: |
           echo "[INFO] Virtual display setup started (BetterDisplay, ephemeral for this workflow only)"
           brew install --cask betterdisplay
-          echo "[INFO] Launching BetterDisplay"
-          open -a BetterDisplay
+          echo "[INFO] Launching BetterDisplay via direct path"
+          open "/Applications/BetterDisplay.app" || true
           for i in $(seq 1 30); do
             pgrep -x BetterDisplay >/dev/null && break
             sleep 2
           done
+          if ! pgrep -x BetterDisplay >/dev/null; then
+            echo "[WARN] Direct launch not detected, fallback: register with lsregister and retry"
+            /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f "/Applications/BetterDisplay.app" || true
+            open "/Applications/BetterDisplay.app" || true
+            for i in $(seq 1 30); do
+              pgrep -x BetterDisplay >/dev/null && break
+              sleep 2
+            done
+          fi
           pgrep -x BetterDisplay >/dev/null && echo "[INFO] BetterDisplay running" || echo "[WARN] BetterDisplay process not detected"
           sleep 5
           BDCLI="/Applications/BetterDisplay.app/Contents/MacOS/BetterDisplay"
