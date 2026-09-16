@@ -1,5 +1,8 @@
 name: "macOS Runner - Phase 4 AnyDesk"
 
+# Thin orchestrator: each step delegates to a script in scripts/
+# (mirrors the RDP-Awan Windows repo layout). No secrets are hardcoded
+# here; secrets are mapped to env vars only where the script needs them.
 on:
   workflow_dispatch:
 
@@ -16,212 +19,25 @@ jobs:
 
       - name: Phase 4 - 1. Prepare macOS
         shell: bash
-        run: |
-          echo "[INFO] macOS setup started"
-          echo "--- Runner context ---"
-          echo "RUNNER_OS=${RUNNER_OS:-unknown}"
-          echo "RUNNER_ARCH=${RUNNER_ARCH:-unknown}"
-          echo "ImageOS=${ImageOS:-unknown}"
-          echo "ImageVersion=${ImageVersion:-unknown}"
-          echo ""
-          echo "--- macOS version ---"
-          sw_vers
-          echo ""
-          echo "--- CPU architecture ---"
-          uname -a
-          uname -m
-          arch || true
-          echo ""
-          echo "--- Active user ---"
-          whoami
-          id
-          echo "SHELL=${SHELL:-unknown}"
-          echo ""
-          echo "--- Hostname ---"
-          hostname
-          scutil --get ComputerName || true
-          scutil --get LocalHostName || true
-          echo ""
-          echo "--- Disk info ---"
-          df -h
-          echo ""
-          echo "[INFO] macOS verification completed"
-
-      - name: Phase 1 - shell script execution test
-        shell: bash
-        run: |
-          echo "[INFO] shell script test started"
-          cat > /tmp/phase1-test.sh <<'EOF'
-          #!/bin/bash
-          echo "[INFO] hello from shell script on macOS"
-          echo "date: $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
-          echo "bash: $BASH_VERSION"
-          EOF
-          chmod +x /tmp/phase1-test.sh
-          /tmp/phase1-test.sh
-          bash /tmp/phase1-test.sh
-          echo "[INFO] shell script test completed"
+        run: bash scripts/prepare-macos.sh
 
       - name: Phase 4 - 2. Install AnyDesk
         shell: bash
-        run: |
-          echo "[INFO] AnyDesk installation started"
-          echo "[INFO] Architecture detected:"
-          uname -m
-          export HOMEBREW_NO_AUTO_UPDATE=1
-          brew install --cask anydesk
-          echo "[INFO] Verifying installation"
-          ls -la /Applications/AnyDesk.app || { echo "::error::FAIL - /Applications/AnyDesk.app missing after install"; exit 1; }
-          AD_BIN="/Applications/AnyDesk.app/Contents/MacOS/AnyDesk"
-          if [ ! -x "$AD_BIN" ]; then
-            echo "[INFO] Default CLI path missing, searching bundle"
-            AD_BIN=$(find /Applications/AnyDesk.app -name AnyDesk -type f -perm +111 2>/dev/null | head -1)
-          fi
-          if [ -z "$AD_BIN" ] || [ ! -x "$AD_BIN" ]; then
-            echo "::error::FAIL - AnyDesk executable not found in bundle"
-            exit 1
-          fi
-          echo "$AD_BIN" > /tmp/anydesk-bin
-          echo "[INFO] CLI path: $AD_BIN"
-          "$AD_BIN" --version || { echo "::error::FAIL - AnyDesk binary will not run"; exit 1; }
-          echo "[INFO] AnyDesk installation completed"
+        run: bash scripts/install-anydesk.sh
 
       - name: Phase 4 - 3. Start AnyDesk
         shell: bash
-        run: |
-          echo "[INFO] Starting AnyDesk via direct path (bounded launch, max 60s per attempt)"
-          launch_ad() {
-            open "/Applications/AnyDesk.app" > /tmp/anydesk-open.log 2>&1 &
-            OPENPID=$!
-            OELAPSED=0
-            while kill -0 $OPENPID 2>/dev/null; do
-              pgrep -x AnyDesk >/dev/null && break
-              if [ "$OELAPSED" -ge 60 ]; then
-                echo "[WARN] open blocked over 60s, detaching (launched app is unaffected)"
-                kill -KILL $OPENPID 2>/dev/null || true
-                break
-              fi
-              sleep 5
-              OELAPSED=$((OELAPSED + 5))
-            done
-            if kill -0 $OPENPID 2>/dev/null; then
-              kill -KILL $OPENPID 2>/dev/null || true
-            fi
-            wait $OPENPID 2>/dev/null || true
-            cat /tmp/anydesk-open.log || true
-          }
-          launch_ad
-          if ! pgrep -x AnyDesk >/dev/null; then
-            echo "[WARN] Direct launch not detected, fallback: lsregister + retry"
-            /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f "/Applications/AnyDesk.app" || true
-            launch_ad
-          fi
-          sleep 5
-          ps aux | grep -i "[A]nyDesk" || true
-          if ! pgrep -x AnyDesk >/dev/null; then
-            echo "::error::FAIL - AnyDesk process not running after launch attempts"
-            exit 1
-          fi
-          AD_BIN=$(cat /tmp/anydesk-bin)
-          AD_PID=$(pgrep -x AnyDesk | head -1)
-          AD_STAT=$(ps -o stat= -p "$AD_PID" 2>/dev/null | tr -d ' ' || echo "?")
-          echo "[INFO] AnyDesk pid=$AD_PID state=$AD_STAT (T means stopped/suspended)"
-          case "$AD_STAT" in
-            *T*)
-              echo "[INFO] Process is stopped, sending CONT to resume"
-              kill -CONT "$AD_PID" 2>/dev/null || true
-              sleep 3
-              AD_STAT=$(ps -o stat= -p "$AD_PID" 2>/dev/null | tr -d ' ' || echo "?")
-              echo "[INFO] State after CONT: $AD_STAT"
-              ;;
-          esac
-          case "$AD_STAT" in
-            *T*)
-              echo "[WARN] Still stopped after CONT, fallback: relaunch binary directly"
-              kill -KILL "$AD_PID" 2>/dev/null || true
-              sleep 2
-              nohup "$AD_BIN" > /tmp/anydesk-app.log 2>&1 &
-              for i in $(seq 1 12); do
-                pgrep -x AnyDesk >/dev/null && break
-                sleep 5
-              done
-              AD_PID=$(pgrep -x AnyDesk | head -1 || true)
-              if [ -z "$AD_PID" ]; then
-                echo "::error::FAIL - AnyDesk will not stay running (stopped state, no backend)"
-                exit 1
-              fi
-              AD_STAT=$(ps -o stat= -p "$AD_PID" 2>/dev/null | tr -d ' ' || echo "?")
-              echo "[INFO] Relaunched pid=$AD_PID state=$AD_STAT"
-              case "$AD_STAT" in
-                *T*) echo "::error::FAIL - AnyDesk process stays suspended, backend cannot start"; exit 1;;
-              esac
-              ;;
-          esac
-          echo "[INFO] AnyDesk start phase completed"
+        run: bash scripts/start-anydesk.sh
 
       - name: Phase 4 - 4. Configure Unattended Access
         shell: bash
         env:
           ANYDESK_PASSWORD: ${{ secrets.ANYDESK_PASSWORD }}
-        run: |
-          echo "[INFO] Unattended access configuration started"
-          if [ -z "$ANYDESK_PASSWORD" ]; then
-            echo "::error::FAIL - ANYDESK_PASSWORD secret is missing. Create it in repo Settings > Secrets > Actions."
-            exit 1
-          fi
-          PWLEN=${#ANYDESK_PASSWORD}
-          echo "[INFO] Password length check: ${PWLEN} chars (value never printed)"
-          if [ "$PWLEN" -lt 8 ]; then
-            echo "::error::FAIL - ANYDESK_PASSWORD must be at least 8 characters (12+ recommended)."
-            exit 1
-          fi
-          AD_BIN=$(cat /tmp/anydesk-bin)
-          printf '%s' "$ANYDESK_PASSWORD" | sudo "$AD_BIN" --set-password
-          unset ANYDESK_PASSWORD
-          echo "[INFO] Unattended access password configured"
+        run: bash scripts/setup-unattended.sh
 
-      - name: Phase 4 - 5. Verify AnyDesk ID
+      - name: Phase 4 - 5/6. Verify AnyDesk
         shell: bash
-        run: |
-          echo "[INFO] Waiting for AnyDesk ID (max 60s)"
-          AD_BIN=$(cat /tmp/anydesk-bin)
-          ANYDESK_ID=""
-          for i in $(seq 1 12); do
-            ANYDESK_ID=$("$AD_BIN" --get-id 2>/dev/null || true)
-            if [ -n "$ANYDESK_ID" ]; then
-              break
-            fi
-            echo "[INFO] Attempt $i: ID empty, retrying..."
-            sleep 5
-          done
-          if [ -z "$ANYDESK_ID" ]; then
-            echo "::error::FAIL - AnyDesk did not obtain an ID"
-            exit 1
-          fi
-          echo "$ANYDESK_ID" > /tmp/anydesk-id
-          echo "[INFO] AnyDesk ID obtained: $ANYDESK_ID"
-
-      - name: Phase 4 - 6. Verify AnyDesk Status
-        shell: bash
-        run: |
-          echo "[INFO] AnyDesk status diagnostics"
-          AD_BIN=$(cat /tmp/anydesk-bin)
-          "$AD_BIN" --version || true
-          echo "--- online status (max 60s) ---"
-          for i in $(seq 1 12); do
-            AD_STATUS=$("$AD_BIN" --get-status 2>/dev/null || true)
-            echo "[INFO] Attempt $i status: ${AD_STATUS:-empty}"
-            echo "$AD_STATUS" | grep -qi "online" && break
-            sleep 5
-          done
-          echo "$AD_STATUS" > /tmp/anydesk-status
-          echo "--- processes ---"
-          ps aux | grep -i "[A]nyDesk" || echo "no AnyDesk process"
-          echo "--- service presence (full install indicator) ---"
-          ls /Library/LaunchDaemons/ 2>/dev/null | grep -i anydesk || echo "no AnyDesk LaunchDaemon (portable install)"
-          echo "--- session context ---"
-          stat -f %Su /dev/console || true
-          echo "[INFO] AnyDesk status diagnostics completed"
+        run: bash scripts/verify-anydesk.sh
 
       - name: Connect Tailscale
         uses: tailscale/github-action@v4
@@ -230,60 +46,16 @@ jobs:
 
       - name: Phase 2 - verify Tailscale
         shell: bash
-        run: |
-          echo "[INFO] Tailscale setup started"
-          tailscale ip -4
-          tailscale status --self=true || tailscale status
-          echo "[INFO] Tailscale connected"
+        run: bash scripts/verify-tailscale.sh
 
       - name: Phase 3 - check GUI session (diagnostics context)
         shell: bash
-        run: |
-          echo "[INFO] GUI session diagnostics (read-only context for permission analysis)"
-          who || true
-          echo "--- console owner ---"
-          stat -f %Su /dev/console || true
-          echo "--- WindowServer ---"
-          ps aux | grep -i "[W]indowServer" || echo "no WindowServer process found"
-          echo "--- displays ---"
-          system_profiler SPDisplaysDataType 2>/dev/null | head -20 || echo "no displays detected"
-          echo "[INFO] GUI session diagnostics completed"
+        run: bash scripts/gui-diagnostics.sh
 
       - name: Phase 4 - 8. Display connection information
         shell: bash
-        run: |
-          ANYDESK_ID=$(cat /tmp/anydesk-id)
-          AD_STATUS=$(cat /tmp/anydesk-status 2>/dev/null || echo "unknown")
-          TS_IP=$(tailscale ip -4 2>/dev/null | head -1 || echo "unknown")
-          echo "================================"
-          echo "ANYDESK REMOTE ACCESS"
-          echo "================================"
-          echo ""
-          echo "AnyDesk ID:"
-          echo "$ANYDESK_ID"
-          echo ""
-          echo "Status:"
-          echo "$AD_STATUS"
-          echo ""
-          echo "Runner:"
-          sw_vers | head -2
-          uname -m
-          echo ""
-          echo "Tailscale IP (diagnostic layer):"
-          echo "$TS_IP"
-          echo ""
-          echo "Keep-alive:"
-          echo "ACTIVE"
-          echo ""
-          echo "Connect from Android using AnyDesk + unattended password."
-          echo "[INFO] Connection information available"
+        run: bash scripts/connection-info.sh
 
       - name: Phase 4 - 9. Keep Alive
         shell: bash
-        run: |
-          echo "[INFO] Keep-alive started - cancel workflow manually to stop (max 6h GitHub limit)"
-          echo "[INFO] AnyDesk + Tailscale remain running during keep-alive"
-          while true; do
-            echo "[INFO] Alive at $(date -u '+%Y-%m-%d %H:%M:%S UTC') - workflow ready"
-            sleep 60
-          done
+        run: bash scripts/keep-alive.sh
