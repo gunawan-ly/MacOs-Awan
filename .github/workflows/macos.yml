@@ -94,6 +94,27 @@ jobs:
           launchctl print "gui/$(id -u)" 2>&1 | head -20 || true
           echo "[INFO] GUI session diagnostics completed"
 
+      - name: Phase 3A - virtual display (BetterDisplay, experiment 1)
+        shell: bash
+        run: |
+          echo "[INFO] Virtual display setup started (BetterDisplay, ephemeral for this workflow only)"
+          brew install --cask betterdisplay
+          echo "[INFO] Launching BetterDisplay"
+          open -a BetterDisplay
+          for i in $(seq 1 30); do
+            pgrep -x BetterDisplay >/dev/null && break
+            sleep 2
+          done
+          pgrep -x BetterDisplay >/dev/null && echo "[INFO] BetterDisplay running" || echo "[WARN] BetterDisplay process not detected"
+          sleep 5
+          BDCLI="/Applications/BetterDisplay.app/Contents/MacOS/BetterDisplay"
+          echo "[INFO] Creating 16:9 virtual screen"
+          "$BDCLI" create -type=VirtualScreen -virtualScreenName=CIDummy -aspectWidth=16 -aspectHeight=9 || echo "[WARN] virtual screen create command failed"
+          sleep 10
+          echo "--- displays after virtual display ---"
+          system_profiler SPDisplaysDataType 2>/dev/null || echo "no displays detected"
+          echo "[INFO] Virtual display setup completed"
+
       - name: Phase 3 - enable Screen Sharing (VNC)
         shell: bash
         env:
@@ -127,7 +148,12 @@ jobs:
           echo "--- GUI session after setup ---"
           stat -f %Su /dev/console || true
           ps aux | grep -i "[W]indowServer" || echo "no WindowServer process found"
-          system_profiler SPDisplaysDataType 2>/dev/null | head -20 || true
+          echo "--- displays detected ---"
+          system_profiler SPDisplaysDataType 2>/dev/null || echo "no displays detected"
+          echo "--- display resolutions ---"
+          system_profiler SPDisplaysDataType 2>/dev/null | grep -i -E "Resolution|Display Type|Main Display|Mirror|Online" || echo "no resolution info"
+          echo "--- framebuffer check ---"
+          ioreg -l 2>/dev/null | grep -i -m 3 "IODisplayPrefsKey" || echo "no IODisplay framebuffer entries"
           echo "--- Tailscale IP for VNC ---"
           tailscale ip -4
           echo "[INFO] Connection information available"
