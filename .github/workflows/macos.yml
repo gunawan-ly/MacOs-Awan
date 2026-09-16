@@ -75,6 +75,25 @@ jobs:
           bash /tmp/phase1-test.sh
           echo "[INFO] shell script test completed"
 
+      - name: Phase 3 - check GUI session (option B diagnostics)
+        shell: bash
+        run: |
+          echo "[INFO] GUI session diagnostics started (read-only, no system changes)"
+          echo "--- logged in users ---"
+          who || true
+          w -h || true
+          echo "--- console owner ---"
+          stat -f %Su /dev/console || true
+          echo "--- WindowServer ---"
+          ps aux | grep -i "[W]indowServer" || echo "no WindowServer process found"
+          echo "--- loginwindow ---"
+          ps aux | grep -i "[l]oginwindow" || echo "no loginwindow process found"
+          echo "--- displays ---"
+          system_profiler SPDisplaysDataType 2>/dev/null | head -40 || true
+          echo "--- Aqua session services ---"
+          launchctl print "gui/$(id -u)" 2>&1 | head -20 || true
+          echo "[INFO] GUI session diagnostics completed"
+
       - name: Phase 3 - enable Screen Sharing (VNC)
         shell: bash
         env:
@@ -95,6 +114,8 @@ jobs:
           unset VNC_PASSWORD
           echo "[INFO] Restarting ARD agent"
           sudo "$KICKSTART" -restart -agent -console || sudo "$KICKSTART" -restart -agent
+          echo "[INFO] Waking display (temporary assertion, ends with workflow)"
+          caffeinate -u -t 300 &
           echo "[INFO] Remote GUI ready"
 
       - name: Phase 3 - verify Screen Sharing
@@ -103,6 +124,10 @@ jobs:
           echo "[INFO] Verifying Screen Sharing listener on port 5900"
           sudo lsof -iTCP:5900 -sTCP:LISTEN || sudo lsof -i :5900 || true
           ps aux | grep -i -E "screensharing|ARDAgent|VNC" | grep -v grep || true
+          echo "--- GUI session after setup ---"
+          stat -f %Su /dev/console || true
+          ps aux | grep -i "[W]indowServer" || echo "no WindowServer process found"
+          system_profiler SPDisplaysDataType 2>/dev/null | head -20 || true
           echo "--- Tailscale IP for VNC ---"
           tailscale ip -4
           echo "[INFO] Connection information available"
