@@ -75,6 +75,39 @@ jobs:
           bash /tmp/phase1-test.sh
           echo "[INFO] shell script test completed"
 
+      - name: Phase 3 - enable Screen Sharing (VNC)
+        shell: bash
+        env:
+          VNC_PASSWORD: ${{ secrets.VNC_PASSWORD }}
+        run: |
+          echo "[INFO] Remote GUI setup started"
+          if [ -z "$VNC_PASSWORD" ]; then
+            echo "::error::VNC_PASSWORD secret is not set. Create it in repo Settings > Secrets > Actions."
+            exit 1
+          fi
+          KICKSTART="/System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart"
+          echo "[INFO] Configuring Remote Management for all users"
+          sudo "$KICKSTART" -activate -configure -access -on -privs -all -restart -agent -allowAccessFor -allUsers
+          echo "[INFO] Enabling VNC legacy mode"
+          sudo "$KICKSTART" -configure -clientopts -setvnclegacy -vnclegacy yes
+          echo "[INFO] Setting VNC password from secret"
+          sudo "$KICKSTART" -configure -clientopts -setvncpw -vncpw "$VNC_PASSWORD"
+          unset VNC_PASSWORD
+          echo "[INFO] Restarting ARD agent"
+          sudo "$KICKSTART" -restart -agent -console || sudo "$KICKSTART" -restart -agent
+          echo "[INFO] Remote GUI ready"
+
+      - name: Phase 3 - verify Screen Sharing
+        shell: bash
+        run: |
+          echo "[INFO] Verifying Screen Sharing listener on port 5900"
+          sudo lsof -iTCP:5900 -sTCP:LISTEN || sudo lsof -i :5900 || true
+          ps aux | grep -i -E "screensharing|ARDAgent|VNC" | grep -v grep || true
+          echo "--- Tailscale IP for VNC ---"
+          tailscale ip -4
+          echo "[INFO] Connection information available"
+          echo "[INFO] Connect VNC client to <TAILSCALE_IP>:5900 via Tailnet using VNC password"
+
       - name: Phase 1 - keep-alive (manual cancel, max 6h)
         shell: bash
         run: |
