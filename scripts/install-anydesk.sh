@@ -21,6 +21,8 @@ if [ -z "$AD_BIN" ] || [ ! -x "$AD_BIN" ]; then
   exit 1
 fi
 echo "$AD_BIN" > /tmp/anydesk-bin
-echo "[INFO] CLI path: $AD_BIN"
-"$AD_BIN" --version || { echo "::error::FAIL - AnyDesk binary will not run"; exit 1; }
-echo "[INFO] AnyDesk installation completed"
+  echo "[INFO] CLI path: $AD_BIN"
+  "$AD_BIN" --version || { echo "::error::FAIL - AnyDesk binary will not run"; exit 1; }
+  echo "--- CLI capabilities probe (looking for service install options) ---"
+  "$AD_BIN" --help 2>&1 || true
+  echo "[INFO] AnyDesk installation completed"
