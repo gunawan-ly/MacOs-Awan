@@ -117,8 +117,21 @@ jobs:
           pgrep -x BetterDisplay >/dev/null && echo "[INFO] BetterDisplay running" || echo "[WARN] BetterDisplay process not detected"
           sleep 5
           BDCLI="/Applications/BetterDisplay.app/Contents/MacOS/BetterDisplay"
-          echo "[INFO] Creating 16:9 virtual screen"
-          "$BDCLI" create -type=VirtualScreen -virtualScreenName=CIDummy -aspectWidth=16 -aspectHeight=9 || echo "[WARN] virtual screen create command failed"
+          echo "[INFO] Creating 16:9 virtual screen (max 90s)"
+          "$BDCLI" create -type=VirtualScreen -virtualScreenName=CIDummy -aspectWidth=16 -aspectHeight=9 > /tmp/bd-create.log 2>&1 &
+          CLIPID=$!
+          ELAPSED=0
+          while kill -0 $CLIPID 2>/dev/null; do
+            if [ "$ELAPSED" -ge 90 ]; then
+              echo "[WARN] create timed out after 90s, killing"
+              kill -KILL $CLIPID 2>/dev/null || true
+              break
+            fi
+            sleep 5
+            ELAPSED=$((ELAPSED + 5))
+          done
+          wait $CLIPID 2>/dev/null || echo "[WARN] virtual screen create exited non-zero or timed out"
+          cat /tmp/bd-create.log || true
           sleep 10
           echo "--- displays after virtual display ---"
           system_profiler SPDisplaysDataType 2>/dev/null || echo "no displays detected"
