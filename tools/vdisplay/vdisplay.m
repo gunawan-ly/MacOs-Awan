@@ -143,18 +143,22 @@ int main(int argc, const char *argv[]) {
                CGDisplayIsOnline(did), CGDisplayIsActive(did), CGDisplayIsMain(did));
         CGDisplayModeRef cur = CGDisplayCopyDisplayMode(did);
         if (cur) {
-            printf("[VDISPLAY] mode refresh=%.2f ioflags=0x%x\n",
-                   CGDisplayModeGetRefreshRate(cur), (unsigned)CGDisplayModeGetIOFlags(cur));
+            char encBuf[64] = { 0 };
+            CFStringRef enc = CGDisplayModeCopyPixelEncoding(cur);
+            if (enc) {
+                CFStringGetCString(enc, encBuf, sizeof(encBuf), kCFStringEncodingUTF8);
+                CFRelease(enc);
+            }
+            printf("[VDISPLAY] mode refresh=%.2f encoding=%s pixel=%zux%zu ioflags=0x%x\n",
+                   CGDisplayModeGetRefreshRate(cur), encBuf[0] ? encBuf : "?",
+                   CGDisplayModeGetPixelWidth(cur), CGDisplayModeGetPixelHeight(cur),
+                   (unsigned)CGDisplayModeGetIOFlags(cur));
             CFRelease(cur);
         }
-        // Framebuffer proof without deprecated capture APIs: a live display
-        // reports nonzero bytes-per-row and bits-per-pixel for its surface.
-        size_t bpr = CGDisplayBytesPerRow(did);
-        size_t bpp = CGDisplayBitsPerPixel(did);
-        printf("[VDISPLAY] framebuffer bytesPerRow=%zu bitsPerPixel=%zu\n", bpr, bpp);
-        if (bpr == 0 || bpp == 0) {
-            printf("[VDISPLAY] WARN zero framebuffer geometry (surface may not be live yet)\n");
-        }
+        // NOTE: legacy direct-framebuffer accessors (CGDisplayCreateImage,
+        // CGDisplayBytesPerRow) were removed from the macOS 15+ SDK; the
+        // live mode + pixel encoding above plus the RealVNC test serve as
+        // the framebuffer proof on this runner.
         listDisplays("AFTER");
         fflush(stdout);
 
