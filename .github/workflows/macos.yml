@@ -2,11 +2,6 @@ name: "macOS Runner - Phase 1"
 
 on:
   workflow_dispatch:
-    inputs:
-      keep_alive_minutes:
-        description: "Durasi keep-alive dalam menit (untuk pengujian)"
-        required: false
-        default: "25"
 
 permissions:
   contents: read
@@ -14,7 +9,7 @@ permissions:
 jobs:
   macos-check:
     runs-on: macos-latest
-    timeout-minutes: 60
+    timeout-minutes: 360
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -67,18 +62,11 @@ jobs:
           bash /tmp/phase1-test.sh
           echo "[INFO] shell script test completed"
 
-      - name: Phase 1 - keep-alive for testing
+      - name: Phase 1 - keep-alive (manual cancel, max 6h)
         shell: bash
-        env:
-          KEEP_ALIVE_INPUT: ${{ inputs.keep_alive_minutes }}
         run: |
-          KEEP_ALIVE_MINUTES="${KEEP_ALIVE_INPUT:-25}"
-          echo "[INFO] Keep-alive started for ${KEEP_ALIVE_MINUTES} minutes"
-          echo "[INFO] Cancel workflow to stop early"
-          END=$(( $(date +%s) + KEEP_ALIVE_MINUTES * 60 ))
-          while [ "$(date +%s)" -lt "$END" ]; do
-            REMAIN=$(( (END - $(date +%s)) / 60 ))
-            echo "[INFO] Alive at $(date -u '+%Y-%m-%d %H:%M:%S UTC') - remaining ~${REMAIN} min"
+          echo "[INFO] Keep-alive started - cancel workflow manually to stop (max 6h GitHub limit)"
+          while true; do
+            echo "[INFO] Alive at $(date -u '+%Y-%m-%d %H:%M:%S UTC') - workflow ready"
             sleep 60
           done
-          echo "[INFO] Keep-alive finished"
