@@ -94,62 +94,37 @@ jobs:
           launchctl print "gui/$(id -u)" 2>&1 | head -20 || true
           echo "[INFO] GUI session diagnostics completed"
 
-      - name: Phase 3A - virtual display (BetterDisplay, experiment 1)
+      - name: Phase 3B - build virtual display tool
         shell: bash
         run: |
-          echo "[INFO] Virtual display setup started (BetterDisplay, ephemeral for this workflow only)"
-          export HOMEBREW_NO_AUTO_UPDATE=1
-          echo "[INFO] $(date -u '+%H:%M:%S') installing BetterDisplay"
-          brew install --cask betterdisplay
-          launch_bd() {
-            open "/Applications/BetterDisplay.app" > /tmp/bd-open.log 2>&1 &
-            OPENPID=$!
-            OELAPSED=0
-            while kill -0 $OPENPID 2>/dev/null; do
-              pgrep -x BetterDisplay >/dev/null && break
-              if [ "$OELAPSED" -ge 60 ]; then
-                echo "[WARN] open blocked over 60s, detaching (kill open, keep any started app)"
-                kill -KILL $OPENPID 2>/dev/null || true
-                break
-              fi
-              sleep 5
-              OELAPSED=$((OELAPSED + 5))
-            done
-            if kill -0 $OPENPID 2>/dev/null; then
-              echo "[INFO] open helper still alive, detaching (launched app is unaffected)"
-              kill -KILL $OPENPID 2>/dev/null || true
-            fi
-            wait $OPENPID 2>/dev/null || true
-            cat /tmp/bd-open.log || true
-          }
-          echo "[INFO] $(date -u '+%H:%M:%S') launching via direct path (attempt 1)"
-          launch_bd
-          if ! pgrep -x BetterDisplay >/dev/null; then
-            echo "[WARN] $(date -u '+%H:%M:%S') direct launch not detected, fallback: register with lsregister and retry"
-            /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f "/Applications/BetterDisplay.app" || true
-            echo "[INFO] $(date -u '+%H:%M:%S') launching via direct path (attempt 2)"
-            launch_bd
-          fi
-          pgrep -x BetterDisplay >/dev/null && echo "[INFO] BetterDisplay running" || echo "[WARN] BetterDisplay process not detected"
-          sleep 5
-          BDCLI="/Applications/BetterDisplay.app/Contents/MacOS/BetterDisplay"
-          echo "[INFO] Creating 16:9 virtual screen (max 90s)"
-          "$BDCLI" create -type=VirtualScreen -virtualScreenName=CIDummy -aspectWidth=16 -aspectHeight=9 > /tmp/bd-create.log 2>&1 &
-          CLIPID=$!
-          ELAPSED=0
-          while kill -0 $CLIPID 2>/dev/null; do
-            if [ "$ELAPSED" -ge 90 ]; then
-              echo "[WARN] create timed out after 90s, app state:"
-              ps aux | grep -i "[B]etterDisplay" || echo "no BetterDisplay process"
-              kill -KILL $CLIPID 2>/dev/null || true
-              break
-            fi
+          echo "[INFO] Building vdisplay (CGVirtualDisplay, single-file ObjC, no Xcode project)"
+          clang --version | head -2
+          clang -O2 -framework Foundation -framework CoreGraphics -o /tmp/vdisplay tools/vdisplay/vdisplay.m
+          ls -l /tmp/vdisplay
+          echo "[INFO] Build completed"
+
+      - name: Phase 3B - create virtual display
+        shell: bash
+        run: |
+          echo "[INFO] Starting vdisplay 1280x720 (owner process stays alive)"
+          nohup /tmp/vdisplay 1280 720 > /tmp/vdisplay.log 2>&1 &
+          echo $! > /tmp/vdisplay.pid
+          for i in $(seq 1 12); do
+            grep -q "READY" /tmp/vdisplay.log 2>/dev/null && break
+            grep -q "FAIL" /tmp/vdisplay.log 2>/dev/null && break
             sleep 5
-            ELAPSED=$((ELAPSED + 5))
           done
-          wait $CLIPID 2>/dev/null || echo "[WARN] virtual screen create exited non-zero or timed out"
-          cat /tmp/bd-create.log || true
-          sleep 10
+          cat /tmp/vdisplay.log
+          if grep -q "FAIL" /tmp/vdisplay.log 2>/dev/null; then
+            echo "::error::vdisplay reported FAIL, see log above"
+            exit 1
+          fi
+          if ! grep -q "READY" /tmp/vdisplay.log 2>/dev/null; then
+            echo "::error::vdisplay did not report READY within 60s"
+            kill -KILL $(cat /tmp/vdisplay.pid) 2>/dev/null || true
+            exit 1
+          fi
+          kill -0 $(cat /tmp/vdisplay.pid) 2>/dev/null && echo "[INFO] vdisplay owner alive" || { echo "::error::vdisplay owner died"; exit 1; }
           echo "--- displays after virtual display ---"
           system_profiler SPDisplaysDataType 2>/dev/null || echo "no displays detected"
           echo "[INFO] Virtual display setup completed"
