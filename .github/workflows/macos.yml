@@ -14,6 +14,19 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Connect Tailscale
+        uses: tailscale/github-action@v4
+        with:
+          authkey: ${{ secrets.TAILSCALE_AUTHKEY }}
+
+      - name: Phase 2 - verify Tailscale
+        shell: bash
+        run: |
+          echo "[INFO] Tailscale setup started"
+          tailscale ip -4
+          tailscale status --self=true || tailscale status
+          echo "[INFO] Tailscale connected"
+
       - name: Phase 1 - macOS environment verification
         shell: bash
         run: |
